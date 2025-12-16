@@ -1,0 +1,115 @@
+---
+title: "Quality filtering and processsing of metabarcoding data"
+author: "Venus van Hoof"
+output: html_notebook
+---
+This script contains code needed to process the foraminifera sequencing data. The script contains quality filtering steps, such as decontam & 0,01% filtering, after the raw reads were run through the Galaxy workflow.
+
+```{r}
+library("decontam")
+library(ggplot2)
+library(tidyverse)
+
+```
+
+Contaminant ASVs are filtered out using the decontam package. This requires an ASV table and file containing information on the controls and actual samples. (In the ASV table, each ASV is labelled as Otuxx, please ignore the Otu in the name, they are actually ASVs, but the Otu-label is just given automatically.)
+
+```{r}
+setwd("C:/Users/Venus/OneDrive - Wageningen University & Research/master year 2/THESIS/data analysis")
+
+samp_dat <- read.csv("AVITI/trial 5 run 1/decontam_file.csv", sep = ";") #information on samples and neg. controls
+asv_tabl <- read.csv("AVITI/trial 5 run 1/T5_R1_asvtbl.csv", row.names = 1, check.names = FALSE) #ASV table 
+
+#calculate the total number of reads after mapping to ASVs
+reads_per_sample <- colSums(asv_tabl)
+sum(reads_per_sample) #5981315 reads
+
+#tanspose ASV table
+asv_tabl <- t(asv_tabl)
+storage.mode(asv_tabl) <- "numeric"
+
+#check which samples have been filtered out in quality control steps before
+dim(asv_tabl)        
+setdiff(samp_dat$sample_id, rownames(asv_tabl)) 
+```
+The ASV table contains 2609 ASVs from 121 samples. Two negative controls (VH302 & VH303) have been filtered out during data processing steps in Galaxy. 
+
+```{r}
+#reorder sampdat to the order of asv_tab
+samp_dat <- samp_dat[match(rownames(asv_tabl), samp_dat$sample_id), ] 
+all(rownames(asv_tabl) == samp_dat$sample_id)  # TRUE
+
+#indicate which samples are the negative controls
+samp_dat$is.neg <- samp_dat$Sample_or_Control == "Control"
+samp_dat %>%
+  filter(Sample_or_Control == "Control") %>%
+  group_by(sample_id) -> neg_control
+
+#run decontam based on prevalence method
+contamdf.prev <- isContaminant(seqtab=asv_tabl, method="prevalence", neg= samp_dat$is.neg, threshold = 0.2) #threshold=0.2
+contam_indices <- which(contamdf.prev$contaminant)
+
+#get ASVs that are contaminated
+contam_asvs <- colnames(asv_tabl)[contam_indices]
+contam_asvs #otu 0983, otu 1278, otu 3323
+
+#remove contaminated ASVs
+asv_table_clean <- asv_tabl[, !colnames(asv_tabl) %in% contam_asvs]  
+
+#remove ASVs that was most predominant in control
+asv_table_clean <- asv_table_clean[, colnames(asv_table_clean) != "Otu0172"]
+
+#check dimensions
+dim(asv_table_clean) #3605 ASVs & 121 samples
+sum(colSums(asv_table_clean)) #5976798 reads
+```
+
+After running decontam, 3 ASVs were flagged as contaminants: Otu0982, Otu1278 & Otu 3323.  The contaminated ASVs are removed from the ASV table. In addition, Otu0172 is removed, because this ASV is most abudant in extraction control 6 and most likely contamination. After removing the contaminant ASVs, 3605 ASVs and 5,976,798 reads are leftover.
+
+Next, a 0.01% cutoff is applied to account for contamination and tag-switching. The following code was replicated from Girard et al. (2022).
+
+```{r}
+### ---------------------- 0.01% cutoff ---------------------------------------------------
+asvtbl_df <- asv_table_clean
+asvtbl_df1 <- as.data.frame(t(apply(asv_table_clean, 1, function(x) x/sum(x))))
+
+#remove asv < 0.01% of reads of the total reads
+for (i in 1:ncol(asvtbl_df)) {
+  
+  for (x in 1:nrow(asvtbl_df)) { #loop over rows and columns of asvtbl_df
+    
+    if (asvtbl_df1[x,i] < 0.0001) { #if the relative abundance is less than 0.0001, the count in asvtbl_df is set to 0
+      
+      asvtbl_df[x,i] <- 0
+    }
+  }
+}
+
+#only keep columns that have more than 0 reads
+asv_filt <- asvtbl_df[,colSums(asvtbl_df) > 0] 
+
+#check dimensions
+dim(asv_filt)  # 3555 asvs & 121 samples
+sum(colSums(asv_filt)) #5937122 reads
+```
+
+After the 0,01% cutoff is applied, only 3555 ASVs are left. 
+
+Lastly, samples with less than 10,000 reads are removed to account for uneven sequencing depth.The ASVs Otu1296, Otu1933, Otu2007,
+Otu2878 and Ot3597 are lost. The final ASV table contains 3550 ASVs from 106 samples. 
+
+```{r}
+asv_filt_2 <- asv_filt[rowSums(asv_filt) >= 10000, ]
+asv_filt_2 <- asv_filt_2[, colSums(asv_filt_2) > 0]
+
+#check dimensions
+dim(asv_filt_2) #15 ASVs were removed & 3550 ASVs & 106 samples
+setdiff(colnames(asv_filt), colnames(asv_filt_2)) #otu1296, 1933, 2007, 2878, 3597 are lost
+sum(colSums(asv_filt_2)) #5914240
+
+#make rarefaction curve
+rarecurve(asv_filt_2, step = 100, col = "blue",
+          xlab = "Number of reads",
+          ylab = "Number of ASVs",
+          label = FALSE)
+dev.off()
