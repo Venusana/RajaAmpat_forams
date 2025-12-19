@@ -15,10 +15,9 @@ library(tidyverse)
 Contaminant ASVs are filtered out using the decontam package. This requires an ASV table and file containing information on the controls and actual samples. (In the ASV table, each ASV is labelled as Otuxx, please ignore the Otu in the name, they are actually ASVs, but the Otu-label is just given automatically.)
 
 ```{r}
-setwd("C:/Users/Venus/OneDrive - Wageningen University & Research/master year 2/THESIS/data analysis")
-
-samp_dat <- read.csv("AVITI/trial 5 run 1/decontam_file.csv", sep = ";") #information on samples and neg. controls
-asv_tabl <- read.csv("AVITI/trial 5 run 1/T5_R1_asvtbl.csv", row.names = 1, check.names = FALSE) #ASV table 
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+samp_dat <- read.csv("Rdata/decontam_file.csv", sep = ";") #information on samples and neg. controls
+asv_tabl <- read.csv("Rdata/T5_R1_asvtbl.csv", row.names = 1, check.names = FALSE) #ASV table 
 
 #calculate the total number of reads after mapping to ASVs
 reads_per_sample <- colSums(asv_tabl)
@@ -107,9 +106,70 @@ dim(asv_filt_2) #15 ASVs were removed & 3550 ASVs & 106 samples
 setdiff(colnames(asv_filt), colnames(asv_filt_2)) #otu1296, 1933, 2007, 2878, 3597 are lost
 sum(colSums(asv_filt_2)) #5914240
 
+library(vegan)
 #make rarefaction curve
 rarecurve(asv_filt_2, step = 100, col = "blue",
           xlab = "Number of reads",
           ylab = "Number of ASVs",
           label = FALSE)
 dev.off()
+```
+
+Lastly, the ASV table, sequences, blastresults and metadata are combined to create a working file. 
+
+```{r}
+library(reshape2)
+
+asv_filtered <- asv_filt_2
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+taxo <- read.csv("Rdata/taxonomy.csv", sep = ";")
+seq <- read.csv("Rdata/T5_R1_filtered_asvs_new.csv", sep = ",")
+T5_R1_Fblast <- read.csv("Rdata/T5_R1_new_blastforam.csv", sep = "\t")
+
+#match column names and remove ASVs that were filtered out
+colnames(T5_R1_Fblast)[colnames(T5_R1_Fblast) == "X.Query.ID"] <- "otu"
+T5_R1_Fblast %>%
+  filter(!otu %in% c("Otu0172", "Otu1933", "Otu2007", "Otu2878")) -> T5_R1_Fblast
+
+colnames(seq)[colnames(seq) == "OTU"] <- "otu"
+seq %>%
+  filter(!otu %in% c("Otu0172", "Otu1933", "Otu2007", "Otu2878", "Otu1296", "Otu3597")) -> seq
+
+taxo %>%
+  mutate(across(c(Species, Phylum, Class, Order, Family), as.character)) -> taxo
+colnames(T5_R1_Fblast)[colnames(T5_R1_Fblast) == "X.Subject"] <- "Species"
+T5_R1_Fblast$Species <- str_replace_all(as.character(T5_R1_Fblast$Species), "_", " ")
+
+#check alignment with ASV table and blast results
+setdiff(T5_R1_Fblast$otu, colnames(asv_filtered)) #all asvs that occur in the blastfile also occur in the asvtable
+length(setdiff(colnames(asv_filtered), T5_R1_Fblast$otu)) #570 asvs did not have a foram hit
+
+#reorder ASV table
+T5_R1_asvtbl <- as.data.frame(asv_filtered)
+T5_R1_asvtbl$seqid <- row.names(T5_R1_asvtbl)
+T5_R1_asvtbl <- T5_R1_asvtbl[,c(ncol(T5_R1_asvtbl), 1:(ncol(T5_R1_asvtbl)-1))]
+row.names(T5_R1_asvtbl) <- NULL
+
+#add taxonomy blast results - with a melt dataset
+T5_R1_asvtbl %>%
+  melt(id.vars = c("seqid"), value.name = "reads", variable.name = "otu") %>%
+  merge(
+    as.data.frame(T5_R1_Fblast) %>%
+      merge(taxo, by = "Species") %>%
+      select(1:3, 5, 11:ncol(.)), by = "otu", all = TRUE) %>%
+  merge(seq, by = "otu", all = TRUE) -> df
+
+#add metadata such as benthic dominance
+meta_data <- read.csv("Rdata/metadata.csv", sep = ";")
+
+df %>%
+  left_join(meta_data, by = "seqid") -> df
+
+df <- df[!is.na(df$reads) & df$reads > 0, ]
+
+#check dimensions
+sum(df$reads) #5914240 reads
+length(unique(df$otu)) #3550 otus
+
+#write.csv(df, "Rdata/working_dataset.csv", row.names=FALSE)
+```
