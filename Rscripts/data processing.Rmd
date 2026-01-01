@@ -173,3 +173,71 @@ length(unique(df$otu)) #3550 otus
 
 #write.csv(df, "Rdata/working_dataset.csv", row.names=FALSE)
 ```
+The plot below shows the number of reads that are retained at each processing step. The plots are saved as a SVG file, to allow for editing of the plots later on. 
+
+```{r}
+library(tidyverse)
+library(readxl)
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+###----------------------- Barplot for reads retained at each processing step ---------------------
+
+#order data
+dat_proces <- as.data.frame(read_xlsx("Rdata/data processing reads retained.xlsx", sheet= 1))
+colnames(dat_proces)
+colnames(dat_proces)[colnames(dat_proces) == "...1"] <- "tool"
+
+dat_proces$tool <- factor(dat_proces$tool, levels = unique(dat_proces$tool))
+
+#make barplot
+dat_proces %>%
+  ggplot(aes(x = reorder(tool,-`reads retained`), y=`reads retained`)) +
+  geom_col(fill = "#238A8DFF") + 
+  theme_bw() +
+  ggtitle("Reads retained") +
+  theme(text = element_text(family = "Arial", face = "plain"),
+        plot.title = element_text(hjust=0.5,size =18, face = "bold" ),
+        axis.text.x = element_text(angle = 20, hjust = 1, size = 14),
+        axis.title = element_text(size = 16, face = "bold")) +
+  labs(x= "Data processing step",y = "Number of reads") -> reads_retained
+
+#ggsave("Graphs/reads_retained.svg",        
+       plot = reads_retained,                                              
+       device = "svg",                    
+       width = 7, 
+       height = 5, 
+       dpi = 300)
+```
+The plot below shows the number of ASVs that are retained at each processing step. The plots are saved as a SVG file, to allow for editing of the plots later on. 
+
+```{r}
+library(tidyverse)
+library(readxl)
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+###----------------------- Barplot for ASVs retained at each processing step ---------------------
+
+ASV_proces <- as.data.frame(read_xlsx("Rdata/data processing reads retained.xlsx", sheet= 2))
+colnames(ASV_proces)
+colnames(ASV_proces)[colnames(ASV_proces) == "...1"] <- "tool"
+
+ASV_proces$tool <- factor(ASV_proces$tool, levels = unique(ASV_proces$tool))
+library(colorspace)
+
+ASV_proces %>%
+  ggplot(aes(x = reorder(tool,-Otus), y=Otus)) +
+  geom_col(fill = lighten("#238A8DFF", amount = 0.35))+ 
+  theme_bw() +
+  ggtitle("ASVs retained") +
+  theme(text = element_text(family = "Arial", face = "plain"),
+        plot.title = element_text(hjust=0.5,size =18, face = "bold" ),
+        axis.text.x = element_text(angle = 20, hjust = 1, size = 14),
+        axis.title = element_text(size = 16, face = "bold")) +
+  labs(x= "Data processing step", y = "Number of ASVs") ->asv_retained
+
+#ggsave("graphs/asv_retained.svg",        
+       plot = asv_retained,                                              
+       device = "svg",                    
+       width = 7, 
+       height = 5, 
+       dpi = 300)
+
+```

@@ -1,0 +1,344 @@
+---
+title: "Foraminifera community composition"
+author: "Venus van Hoof"
+output:
+  html_document:
+    df_print: paged
+---
+This script contains code for visualizations on the identfied species, community compostion and calculation for the shannon diversity and ASV richness.
+
+**Identified species**
+
+
+In the script below, a barplot is made, showing which species were identified (> 99.4% ID) and the number of reads for each species is shown.
+
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+library(tidyverse)
+library(extrafont)
+library(fitdistrplus)
+library(ggh4x)
+library(car)
+library(FSA)
+
+df <- read.csv("Rdata/working_dataset.csv")
+sum(df$reads)
+foram_df <- subset(df, df$Phylum == "Foraminifera")
+
+#check the read and ASV abundance with higher taxonomic resolution
+sum(foram_df$reads) #5708287 reads
+length(unique(foram_df$otu)) #2980 otus
+foram_ord <-  foram_df[foram_df$X.Identity.percentage > 84,]
+sum(foram_ord$reads) #5536315 reads
+length(unique(foram_ord$otu)) #2420 otus
+foram_fam <-  foram_df[foram_df$X.Identity.percentage > 96,]
+sum(foram_fam$reads) #3525149 reads
+length(unique(foram_fam$otu)) #876 otus
+foram_sp <-  foram_df[foram_df$X.Identity.percentage > 99.4,]
+sum(foram_sp$reads) # 1358462reads
+length(unique(foram_sp$otu)) #50 otus
+length(unique(foram_sp$Morphospecies)) #27 morphospecies
+
+#check ASV and reads for LBF and SBF
+foram_sp %>%
+  filter(Large_benthic_foraminifera == "LBF") -> sp_LBF
+length(unique(sp_LBF$otu))  #27 otus
+sum(sp_LBF$reads) #747873 reads
+
+foram_sp %>%
+  filter(Large_benthic_foraminifera == "SBF") -> sp_SBF
+length(unique(sp_SBF$otu))  #23 otus
+sum(sp_SBF$reads) #610589 reads
+
+###------------------Plot reads per species----------------------------------
+
+#filter species according to LBF and SBF
+foram_sp %>%
+  group_by(Morphospecies, Large_benthic_foraminifera) %>%
+  summarise (nr_reads = sum(reads), .groups = "drop")%>%
+  arrange(desc(nr_reads))-> sp_abundance
+
+sp_abundance %>%
+  filter(Large_benthic_foraminifera == "LBF") %>%
+  pull(Large_benthic_foraminifera) %>%
+  unique()-> foram_sp1_LBF
+LBF_color <- rep("#481567FF", length(foram_sp1_LBF))
+
+sp_abundance %>%
+  filter(Large_benthic_foraminifera == "SBF") %>%
+  pull(Large_benthic_foraminifera) %>%
+  unique()-> foram_sp1_SBF
+SBF_color <- rep("#A3A3A3", length(foram_sp1_SBF))
+
+nested_palette <- c(setNames(SBF_color, foram_sp1_SBF),
+                    setNames(LBF_color, foram_sp1_LBF))
+
+#make barplot
+ggplot(sp_abundance, aes(x = nr_reads, y = reorder(Morphospecies, nr_reads), fill= Large_benthic_foraminifera )) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = nr_reads), nudge_x = 20000, size = 5) +
+  scale_fill_manual(name = "LBF or SBF",
+                    values = nested_palette) +
+  theme_bw() +
+  theme(text = element_text(family = "Arial", face = "plain"),
+        axis.text.y =  element_text(size= 16),
+        axis.text.x = element_text(angle = 45, hjust = 1, size= 16),
+        legend.title = element_text(size = 18, hjust = 0.5),
+        legend.text = element_text(size=18),   
+        axis.title = element_text(size = 18, face = "bold")) +
+  labs(x = "Total number of reads", y = "Species") -> species_level
+
+#ggsave("graphs/species_abundance.svg",        
+       plot = species_level,                                              
+       device = "svg",                    
+       width = 18,  
+       height = 8, 
+       dpi = 300)
+```
+**Community composition**
+
+
+The community composition of foraminifera species is plotted according to each sampling location. The sampling locations are ordered according to DIN:DIP ratio. Different colours are assigned to the families, and the different tones represent the different species within that family. All large benthic foraminifera are giving colours, while the small benthic foraminifera are given greytones. The species are The script to make the composition plot is adapted from https://github.com/EBGirard/COImetabarcoding. 
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+library(colorspace)
+
+
+foram_sp %>%
+  group_by(seqid) %>%
+  mutate(tot_abund_seqid = sum(reads)) %>%
+  group_by(seqid, Morphospecies) %>%
+  mutate(abund_sp = sum(reads)) %>%
+  mutate(rel_abund = abund_sp/tot_abund_seqid)->foram_sp1
+
+foram_sp1 <- foram_sp1 %>%
+  separate(seqid, 
+           into = c("identifier","extraction plate","NBCLAB ID","Year","SED","Repl","Plate","Label","Pos"), 
+           sep = "_", remove = FALSE) %>%
+  unite("Replicate", Year, SED, Repl, sep = "_", remove = TRUE)
+
+foram_sp1 %>%
+  mutate(Location = case_when(
+    Location == "Mioskin" ~ "Mioskon",
+    Location == "MEHR" ~ "MERHR",
+    Location == "EpiCity" ~ "Epaulette City",
+    Location == "KaligN" ~ "KaligNorth",
+    TRUE ~ Location)) ->foram_sp1
+
+#re-arrange locations according to DIN:DIP ratio
+foram_sp1$Location <- factor(foram_sp1$Location, levels = c("Batbitieru","StaffHQ", "MERHR", "LumbaLumba", "Yellit", "South kri",
+                                                            "Sabenibnu", "Yenbuba", "Epaulette City", "Villa-MER", "Warakaket", "MER-Bay",
+                                                            "Mioskon", "New Reef", "KaligNorth", "KaligRHM", "Sorido Bay",
+                                                            "GracesWall","Arborek",  
+                                                  "MIS27",  "MIS23", "MIS26","MIS06"))
+# assign different colours to families and species
+foram_sp1 %>%
+  filter(Large_benthic_foraminifera == "LBF") %>%
+  filter(Family == "Calcarinidae") %>%
+  pull(Morphospecies) %>%
+  unique()-> foram_cal_LBF
+LBF_cal <- lighten("#0D0087", seq(0, 0.6, length.out = 4))
+
+foram_sp1 %>%
+  filter(Large_benthic_foraminifera == "LBF") %>%
+  filter(Family == "Nummulitidae") %>%
+  pull(Morphospecies) %>%
+  unique()-> foram_num_LBF
+LBF_num <- lighten("darkmagenta", seq(0, 0.6, length.out = 3))
+
+
+foram_sp1 %>%
+  filter(Large_benthic_foraminifera == "LBF") %>%
+  filter(Family == "Peneroplidae") %>%
+  pull(Morphospecies) %>%
+  unique()-> foram_pen_LBF
+LBF_pen <- lighten("#E16462", seq(0, 0.6, length.out = 2))
+
+foram_sp1 %>%
+  filter(Large_benthic_foraminifera == "LBF") %>%
+  filter(Family == "Amphisteginidae") %>%
+  pull(Morphospecies) %>%
+  unique()-> foram_amph_LBF
+LBF_amph <- darken("#7AD151", seq(0, 0.6, length.out = 4))
+
+foram_sp1 %>%
+  filter(Large_benthic_foraminifera == "LBF") %>%
+  filter(Family == "Soritidae") %>%
+  pull(Morphospecies) %>%
+  unique()-> foram_sor_LBF
+LBF_sor <- lighten("#FCA636", seq(0, 0.4, length.out = 2))
+
+foram_sp1 %>%
+  filter(Large_benthic_foraminifera == "LBF") %>%
+  filter(Family == "Alveolinidae") %>%
+  pull(Morphospecies) %>%
+  unique()-> foram_alv_LBF
+LBF_alv <- "#F0F921"
+
+foram_sp1 %>%
+  filter(Large_benthic_foraminifera == "SBF") %>%
+  pull(Morphospecies) %>%
+  unique()-> foram_sp1_SBF
+SBF_color <- hcl.colors(11, palette = "LightGrays")
+
+nested_palette <- c(setNames(LBF_alv, foram_alv_LBF),
+                    setNames(LBF_amph, foram_amph_LBF),
+                    setNames(LBF_cal, foram_cal_LBF),
+                    setNames(LBF_num, foram_num_LBF),
+                    setNames(LBF_pen, foram_pen_LBF),
+                    setNames(LBF_sor, foram_sor_LBF),
+                    setNames(SBF_color, foram_sp1_SBF))
+
+foram_sp1 <- foram_sp1 %>%
+  mutate(Morphospecies = factor(Morphospecies, levels = names(nested_palette)))
+
+
+#plot graph
+foram_sp1 %>%
+  ggplot(aes(fill = factor(Morphospecies), y = rel_abund, x = Replicate)) + 
+  geom_bar(position = "fill", stat = "identity") +
+  facet_wrap(~ Location, scales = "free_x", ncol = 8)+
+  scale_fill_manual(
+    name = "Species",
+    values = nested_palette,
+    guide = guide_legend(title.position = "top")) +
+  theme_bw() +
+  theme(
+    panel.background = element_rect(fill = "white"),
+    strip.background = element_blank(),
+    text = element_text(family = "Arial"), #segoe ui
+    strip.text = element_text(face = "bold", size = 16),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, size = 18),
+    axis.title.x = element_blank(),
+    axis.title.y = element_text(face = "bold", vjust = 0.5, size= 18),
+    legend.key.size = unit(0.5, "lines"),
+    legend.text = element_text(size = 16),
+    legend.title = element_text(size = 18, hjust = 0.5),
+    legend.position = "bottom",
+    legend.direction = "horizontal"
+  ) +
+  ylab("Relative abundance of foraminifera species (> 99.4 % ID)") -> com_composition
+
+#ggsave("Graphs/comp_comp.png", plot = com_composition, width = 24, height = 18, dpi = 600)
+
+#ggsave("Graphs/com_comp.svg",        
+       plot = com_composition,                                              
+       device = "svg",                    
+       width = 26, 
+       height = 18, 
+       dpi = 300)
+```
+ **Shannon diversity** 
+ 
+ 
+Now, the Shannon diversity is calculated for each sampling location at ASV-level. The mean Shannon diversity of each replicate measurement is calculated and plotted in a boxplot. Equal variances are calculated with Levene's test, but the variances were not equal, even after log transformation. Therefore, significance is tested with the Kruskal-Wallis test.
+
+```{r}
+###------------------------Shannon diversity-------------------------------------
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+#calculate shannon index per 
+foram_df %>%
+  group_by(Location, seqid,otu) %>%
+  summarise(reads = sum(reads), .groups = "drop") %>% #sum reads per otu per sample
+  group_by(Location, seqid) %>%
+  mutate(total_abund = sum(reads)) %>%
+  mutate(rel_abund = reads/total_abund) %>%
+  summarise(shannon = -sum(rel_abund * log(rel_abund)), .groups = "drop") -> foram_shannon
+
+foram_shannon %>%
+  group_by(Location) %>%
+  summarise(mean_shannon = mean(shannon)) -> foram_shannon_m
+
+foram_shannon$Location <- factor(foram_shannon$Location, levels = c("Batbitieru","StaffHQ", "MEHR", "LumbaLumba", "Yellit", "South kri",
+                                                                    "Sabenibnu", "Yenbuba", "EpiCity", "Villa-MER", "Warakaket", "MER-Bay",
+                                                                    "Mioskin", "New Reef", "KaligN", "KaligRHM", "Sorido Bay",
+                                                                    "GracesWall","Arborek",  
+                                                                    "MIS27",  "MIS23", "MIS26","MIS06"))
+#plot boxplot
+foram_shannon%>%
+  ggplot(aes(x= Location, y= shannon)) +
+  geom_boxplot() +
+  geom_point(size= 1.8, shape = 21, fill = "black")+
+  theme_bw() + 
+  theme(
+    text = element_text(family = "Arial", face = "plain"), 
+    axis.text.x = element_text(angle = 90,vjust=0.5, size= 14),
+    axis.title.x = element_text(size=16, face = "bold"),
+    axis.title.y = element_text(size=16, face = "bold"),
+    legend.title  = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal") +
+  xlab("Location") +
+  ylab("Shannon Index") -> shannon_box
+
+#ggsave("Graphs/shannon.svg",        
+       plot = shannon_box,                                              
+       device = "svg",                    
+       width = 10,         
+       height = 6, 
+       dpi = 300)
+
+#test for signficant difference in shannon diversity
+leveneTest(shannon ~ as.factor(Location), data = foram_shannon, center = mean) #variances not equal
+foram_shannon$shannon_log <- log(foram_shannon$shannon + 1) #variances still not equal after transformation
+kruskal.test(shannon ~ as.factor(Location), data = foram_shannon) #kruskal wallis, p = 0.008497
+dunnTest(shannon ~ as.factor(Location), data = foram_shannon, method = "bh")
+```
+**ASV richness**
+
+Next, ASV richnesss is calculated for each location. It follows a similar code as for the Shannon diversity. 
+```{r}
+#----------------------ASV richness per sampling location------------------------------------------------
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+#calculate richness
+foram_df %>%
+  group_by(seqid, Location)%>%
+  summarise(nr_reads = sum(reads),
+            nr_otu = n(), .groups = "drop") -> foram_otu
+
+foram_otu %>%
+  group_by(Location) %>%
+  summarise(richness = mean(nr_otu)) -> foram_otu_m
+
+
+
+foram_otu$Location <- factor(foram_otu$Location, levels = c("Batbitieru","StaffHQ", "MEHR", "LumbaLumba", "Yellit", "South kri",
+                                                            "Sabenibnu", "Yenbuba", "EpiCity", "Villa-MER", "Warakaket", "MER-Bay",
+                                                            "Mioskin", "New Reef", "KaligN", "KaligRHM", "Sorido Bay",
+                                                            "GracesWall","Arborek",  
+                                                            "MIS27",  "MIS23", "MIS26","MIS06"))
+
+#boxplot
+foram_otu%>%
+  ggplot(aes(x= Location, y= nr_otu)) +
+  geom_boxplot() +
+  geom_point(size= 1.8, shape = 21, fill = "black")+
+  theme_bw() +
+  theme(
+    text = element_text(family = "Arial", face = "plain"), 
+    axis.text.x = element_text(angle = 90,vjust=0.5, size= 14),
+    axis.title.x = element_text(size =16, face = "bold"),
+    axis.title.y = element_text(size=16, face = "bold"),
+    legend.title  = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal") +
+  xlab("Location") +
+  ylab("Number of ASVs") -> richness_box
+
+#ggsave("Graphs/richness_box.svg",        
+       plot = richness_box,                                              
+       device = "svg",                    
+       width = 10,               
+       height = 6, 
+       dpi = 300)
+
+#test for signficant difference in richness diversity
+leveneTest(nr_otu ~ as.factor(Location), data = foram_otu, center = mean) #variances not equal
+foram_otu$nr_otu_log <- log(foram_otu$nr_otu + 1) #variances still not equal after transformation
+kruskal.test(nr_otu ~ as.factor(Location), data = foram_otu) #kruskal wallis, p = 0.00005
+dunnTest(nr_otu ~ as.factor(Location), data = foram_otu, method = "bh")
+```

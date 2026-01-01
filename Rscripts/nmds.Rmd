@@ -1,0 +1,417 @@
+---
+title: "NMDS"
+author: Venus van Hoof
+output: html_notebook
+---
+
+**NMDS**
+
+The code executes a nmds and nmds plot using the vegan package. The ASV abundance matrix is hellinger transformed and distances are calculated based on Bray-curtis distance. Data from all sampling locations are included. Different colours are given from sampling locations from reefs and marine lakes. 
+
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+library(tidyverse)
+library(vegan)
+library(extrafont)
+library(fitdistrplus)
+library(ggh4x)
+library(car)
+library(FSA)
+library(pairwiseAdonis)
+
+df <- read.csv("Rdata/working_dataset.csv")
+foram_df <- subset(df, df$Phylum == "Foraminifera")
+foram_sp <-  foram_df[foram_df$X.Identity.percentage > 99.4,]
+
+###----------------------------NMDS plot for marine lakes and reefs (ASV)------------------------------------
+#make ASV table matrix
+foram_df %>%
+  dplyr::select(otu, seqid,reads) %>%
+  pivot_wider(names_from = otu, values_from = reads, values_fill = list(reads = 0)) %>%
+  as.data.frame()-> foram_df1
+dim(foram_df1) #106 samples and 2981 ASVs
+
+rownames(foram_df1) <- foram_df1$seqid
+foram_df1 <- foram_df1[, -1]
+foram_df1 <- as.matrix(foram_df1)
+
+#hellinger transformation
+foram_hell <- decostand(foram_df1, method = "hellinger") 
+
+#calculate nmds
+set.seed(1)
+nmds <- metaMDS(foram_hell, distance= "bray", trymax=100, maxit = 1000, k=2) #stress = 0.192083
+stressplot(nmds)
+
+#add metadata 
+foram_df %>%
+  dplyr::select(seqid, Location, Habitat, Benthic.group) %>%
+  unique()-> foram_metadat
+
+#plot nmds
+scores(nmds, display = "sites") %>%
+  as_tibble(rownames = "seqid") %>%
+  inner_join(foram_metadat, by = "seqid") %>%
+  ggplot(aes(x = NMDS1, y = NMDS2, color = Habitat)) +
+  geom_point(size= 3) + 
+  scale_color_manual(values = c("Reef" = "#39568CFF", "Marine Lake" = "#55C667FF")) +
+  theme_bw() + 
+  theme(text = element_text(family = "Arial", face = "plain"),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 14),
+        axis.title = element_text(size = 16, face = "bold", hjust = 0.5)) -> nmds_all
+
+ggsave("Graphs/nmds_all.svg",        
+       plot = nmds_all,                                              
+       device = "svg",                    
+       width = 12,                       
+       height = 6, 
+       dpi = 300)
+
+adonis2(foram_hell~Habitat,data=foram_metadat,method="bray")
+```
+
+Because the reefs are signficantly different from the marine lakes, different nmds plots are made for the reefs and marine lakes.
+
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+
+###----------------------------NMDS plot reefs (ASV)--------------------------------------
+
+#make ASV table matrix
+foram_df %>%
+  filter(!Location %in% c("MIS23", "MIS26", "MIS27", "MIS06")) %>%
+  dplyr::select(otu, seqid,reads) %>%
+  pivot_wider(names_from = otu, values_from = reads, values_fill = list(reads = 0)) %>%
+  as.data.frame()-> foram_reef
+dim(foram_reef) #87 samples and 2741 ASVs
+
+rownames(foram_reef) <- foram_reef$seqid
+foram_reef <- foram_reef[, -1]
+foram_reef <- as.matrix(foram_reef)
+
+#hellinger transformation
+foram_hellr <- decostand(foram_reef, method = "hellinger") 
+
+#calculate nmds
+set.seed(1)
+nmds <- metaMDS(foram_hellr, distance= "bray", trymax=100, maxit = 1000, k=2) #stress = 0.1895536
+stressplot(nmds)
+
+#add metadata
+foram_df %>%
+  filter(!Location %in% c("MIS23", "MIS26", "MIS27", "MIS06")) %>%
+  dplyr::select(seqid, Location, Habitat, Benthic.group) %>%
+  unique()-> foram_metadatr
+
+#calculate significant species
+r.species <- envfit(nmds, foram_hellr)
+r.species.plot <- as.data.frame(scores(nmds)$species)
+r.species.plot$otu <- rownames(r.species.plot)
+r.species.plot <- cbind(r.species.plot, pval=r.species$vectors$pvals)
+r.species.sig <- subset(r.species.plot, pval<=0.001)
+write.csv(r.species.sig, "Rdata/sig_sp_nmds_reef.csv", row.names = TRUE)
+
+# extract species names
+foram_sp <-  foram_df[foram_df$X.Identity.percentage > 99.4,]
+foram_sp %>%
+  dplyr::select(Morphospecies, otu, Large_benthic_foraminifera) %>%
+  unique()-> sp_dat
+
+#get asv abundance data
+foram_reef %>%
+  as.data.frame() %>%
+  rownames_to_column("ID") %>%
+  pivot_longer(-ID, names_to = "otu", values_to = "nr_reads") -> reef_abund
+
+#join species names to signficant asvs
+r.species.sig %>%
+  left_join(reef_abund, by = "otu") %>%
+  inner_join(sp_dat, by = "otu") -> r.sp.sig
+
+#collapse species to weighted mean
+r.sp.sig %>%group_by(Morphospecies) %>%
+  summarise(NMDS1 = weighted.mean(NMDS1, nr_reads),
+            NMDS2 = weighted.mean(NMDS2, nr_reads)) %>%
+  drop_na()-> sig.species
+
+#plot nmds
+scores(nmds, display = "sites") %>%
+  as_tibble(rownames = "seqid") %>%
+  inner_join(foram_metadat, by = "seqid") %>%
+  ggplot(aes(x = NMDS1, y = NMDS2, color = Benthic.group)) +
+  geom_point(size= 3) + 
+  scale_color_manual(values = c("hard coral dominated" = "#4B0055", "macro-algae" = "#008298",
+                                "macro-algae & hard coral" = "#274983", "rubble - soft coral - encrusting coral" = "#7ED357",
+                                "soft coral dominated" = "#FDE333")) +
+  stat_ellipse(aes(x = NMDS1, y = NMDS2, color = Benthic.group),
+               linetype = "dashed", level = 0.95)+ 
+  ggrepel::geom_text_repel(data=sig.species, inherit.aes = FALSE,
+                           aes(NMDS1, NMDS2, label=Morphospecies),  max.overlaps = 50,
+                           color = "black", size = 5)+
+  ggtitle("Reef") +
+  labs(color = "Benthic group dominance") +
+  theme_bw() + 
+  theme(text = element_text(family = "Arial", face = "plain"),
+        plot.title = element_text(size = 18),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 14),
+        axis.title = element_text(size = 16, face = "bold")) -> nmds_reef_asv
+
+ggsave("Graphs/nmds_reefasv.svg",        
+       plot = nmds_reef_asv,                                              
+       device = "svg",                    
+       width = 12,                                        
+       height = 6, 
+       dpi = 300)
+
+adonis2(foram_hellr ~Benthic.group,data=foram_metadatr,method="bray")
+set.seed(123)
+results <- pairwise.adonis(vegdist(foram_hellr,"bray"), foram_metadatr[,4], p.adjust.m = "bonferroni")
+
+library(writexl)
+write_xlsx(results, "Rdata/pairwise_nmdsreef.xlsx")
+```
+Now, the nmds for the marine lakes is calculated.
+
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+###----------------------------NMDS plot marine lakes (ASV)--------------------------------------
+
+#make ASV table matrix
+foram_df %>%
+  filter(Location %in% c("MIS23", "MIS26", "MIS27", "MIS06")) %>%
+  dplyr::select(otu, seqid,reads) %>%
+  pivot_wider(names_from = otu, values_from = reads, values_fill = list(reads = 0)) %>%
+  as.data.frame()-> foram_ml
+dim(foram_ml) #19 samples and 763 ASVs
+
+rownames(foram_ml) <- foram_ml$seqid
+foram_ml <- foram_ml[, -1]
+foram_ml <- as.matrix(foram_ml)
+
+#hellinger transformation
+foram_hellml <- decostand(foram_ml, method = "hellinger") 
+
+#calculate nmds
+set.seed(1)
+nmdsml <- metaMDS(foram_hellml, distance= "bray", trymax=100, maxit = 1000, k=2) #stress = 0.1155291
+stressplot(nmds)
+
+#add metadata
+foram_df %>%
+  filter(Location %in% c("MIS23", "MIS26", "MIS27", "MIS06")) %>%
+  dplyr::select(seqid, Location, Habitat, Benthic.group) %>%
+  unique()-> foram_metadatml
+
+#calculate significant species
+ml.species <- envfit(nmdsml, foram_hellml)
+ml.species.plot <- as.data.frame(scores(nmdsml)$species)
+ml.species.plot$otu <- rownames(ml.species.plot)
+ml.species.plot <- cbind(ml.species.plot, pval=ml.species$vectors$pvals)
+ml.species.sig <- subset(ml.species.plot, pval<=0.001)
+write.csv(ml.species.sig, "Rdata/sig_sp_ml_reef.csv", row.names = TRUE)
+
+# extract family names
+foram_sp <-  foram_df[foram_df$X.Identity.percentage > 99.4,]
+foram_sp %>%
+  dplyr::select(Morphospecies, otu, Large_benthic_foraminifera) %>%
+  unique()-> sp_dat
+
+#get asv abundance data
+foram_ml %>%
+  as.data.frame() %>%
+  rownames_to_column("ID") %>%
+  pivot_longer(-ID, names_to = "otu", values_to = "nr_reads") -> ml_abund
+
+#join family names to signficant asvs
+ml.species.sig %>%
+  left_join(ml_abund, by = "otu") %>%
+  left_join(sp_dat, by = "otu")-> ml.sp.sig
+
+#collapse families to weighted mean
+ml.sp.sig %>%group_by(Morphospecies) %>%
+  summarise(NMDS1 = weighted.mean(NMDS1, nr_reads),
+            NMDS2 = weighted.mean(NMDS2, nr_reads)) %>%
+  drop_na()-> ml.sp
+
+#plot nmds
+scores(nmdsml, display = "sites") %>%
+  as_tibble(rownames = "seqid") %>%
+  inner_join(foram_metadat, by = "seqid") %>%
+  ggplot(aes(x = NMDS1, y = NMDS2, color = Benthic.group)) +
+  geom_point(size= 3) + 
+  scale_color_manual(values = c("macro-algae & hard coral" = "#274983",
+                                "CCA & Sponge" = "#00B28A", "rubble - soft coral - encrusting coral" = "#7ED357")) +
+  stat_ellipse(aes(x = NMDS1, y = NMDS2, color = Benthic.group),
+               linetype = "dashed", level = 0.95)+ #95% confidence ellipse
+  ggrepel::geom_text_repel(data=ml.sp, inherit.aes = FALSE,
+                           aes(NMDS1, NMDS2, label= Morphospecies),  max.overlaps = 50,
+                           color = "black", size = 5)+
+  ggtitle("Marine Lake") +
+  labs(color = "Benthic group dominance") +
+  theme_bw() + 
+  theme(text = element_text(family = "Arial", face = "plain"),
+        plot.title = element_text(size = 18),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 14),
+        axis.title = element_text(size = 16, face = "bold")) -> nmds_ml_asv
+
+ggsave("Graphs/nmds_mlasv.svg",        
+       plot = nmds_ml_asv,                                              
+       device = "svg",                    
+       width = 12,                                                                                       # You can play with the ratio of width and height to get the best outcome for each plot 
+       height = 6, 
+       dpi = 300)
+
+adonis2(foram_hellml ~Benthic.group,data=foram_metadatml,method="bray")
+set.seed(123)
+results <- pairwise.adonis(vegdist(foram_hellml,"bray"), foram_metadatml[,4], p.adjust.m = "bonferroni")
+
+write_xlsx(results, "Rdata/pairwise_adonis_resultsml.xlsx")
+```
+**Shannon diversity**
+
+The Shannon diversity for the different benthic group dominances is calculated. A boxplot for the shannon diversity is made with a seprate graph for the marine lake and reef benthic groups. Signficant differences in benthic group dominances are calculated for each habitat (reef or marine lake), therefore different subsets are made for each habitat type. 
+
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+#calculate shannon diversity
+foram_df %>%
+  group_by(Habitat,Benthic.group, seqid,otu) %>%
+  summarise(reads = sum(reads), .groups = "drop") %>% #sum reads per otu per sample
+  group_by(Habitat,Benthic.group, seqid) %>%
+  mutate(total_abund = sum(reads)) %>%
+  mutate(rel_abund = reads/total_abund) %>%
+  summarise(shannon = -sum(rel_abund * log(rel_abund)), .groups = "drop") %>%
+  group_by(Habitat, Benthic.group) %>%
+  mutate(mean_shannon = mean(shannon))-> foram_shannon
+
+#create boxplot
+foram_shannon%>%
+  ggplot(aes(x= Benthic.group, y= shannon)) +
+  geom_boxplot() +
+  geom_point(size= 1.8, shape = 21, fill = "black")+
+  facet_wrap(~Habitat, scales = "free_x") +
+  theme_bw() + 
+  theme(
+    text = element_text(family = "Arial", face = "plain"),
+    strip.text = element_text(size = 14),
+    axis.text.x = element_text(angle = 90,vjust=0.5, size= 14),
+    axis.title.x = element_text(size=16, face = "bold"),
+    axis.title.y = element_text(size=16, face = "bold"),
+    legend.title  = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal") +
+  xlab("Benthic group dominance") +
+  ylab("Shannon Index") -> benthicg
+
+ggsave("Graphs/shannon_bg.svg",        
+       plot = benthicg,                                              
+       device = "svg",                    
+       width = 14,                                 
+       height = 10, 
+       dpi = 300)
+
+#test for signficant difference in benthic group dominance per habitat
+#calculate for reefs
+foram_df %>%
+  filter(Habitat %in% "Reef") %>%
+  group_by(Benthic.group, seqid,otu) %>%
+  summarise(reads = sum(reads), .groups = "drop") %>% #sum reads per otu per sample
+  group_by(Benthic.group, seqid) %>%
+  mutate(total_abund = sum(reads)) %>%
+  mutate(rel_abund = reads/total_abund) %>%
+  summarise(shannon = -sum(rel_abund * log(rel_abund)), .groups = "drop") %>%
+  group_by( Benthic.group) %>%
+  mutate(mean_shannon = mean(shannon))-> foram_shannon_r
+
+leveneTest(shannon ~ as.factor(Benthic.group), data = foram_shannon_r, center = mean) #variances  equal
+anova(lm(shannon ~ as.factor(Benthic.group), data = foram_shannon_r)) # p = 0.3
+
+#calculate for marine lake
+foram_df %>%
+  filter(Habitat %in% "Marine Lake") %>%
+  group_by(Benthic.group, seqid,otu) %>%
+  summarise(reads = sum(reads), .groups = "drop") %>% #sum reads per otu per sample
+  group_by(Benthic.group, seqid) %>%
+  mutate(total_abund = sum(reads)) %>%
+  mutate(rel_abund = reads/total_abund) %>%
+  summarise(shannon = -sum(rel_abund * log(rel_abund)), .groups = "drop") %>%
+  group_by( Benthic.group) %>%
+  mutate(mean_shannon = mean(shannon))-> foram_shannon_ml
+
+leveneTest(shannon ~ as.factor(Benthic.group), data = foram_shannon_ml, center = mean) #variances not equal
+foram_shannon_ml$shannon_log <- log(foram_shannon_ml$shannon + 1) #variances still not equal after transformation
+kruskal.test(shannon ~ as.factor(Benthic.group), data = foram_shannon_ml) # p = 0.2265
+```
+
+***ASV richness***
+Similar to above, the ASV richness is calculated for each benthic group dominance within each habitat type. The results are visualized in a boxplot. 
+
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+library(agricolae)
+
+###------------------------richness diversity benthic groups-------------------------------
+
+foram_df %>%
+  group_by(Habitat, Benthic.group, seqid)%>%
+  summarise(nr_otu = n(), .groups = "drop") %>%
+  group_by(Habitat, Benthic.group) %>%
+  mutate(mean_otu = mean(nr_otu))-> foram_otu
+
+foram_otu%>%
+  ggplot(aes(x= Benthic.group, y= nr_otu)) +
+  geom_boxplot() +
+  geom_point(size= 1.8, shape = 21, fill = "black")+
+  facet_wrap(~Habitat, scales = "free_x") +        
+  theme_bw() +
+  theme(
+    text = element_text(family = "Arial", face = "plain"), 
+    strip.text = element_text(size = 14),
+    axis.text.x = element_text(angle = 90,vjust=0.5, size= 14),
+    axis.title.x = element_text(size=16, face = "bold"),
+    axis.title.y = element_text(size=16, face = "bold"),
+    legend.title  = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal") +
+  xlab("Benthic group dominances") +
+  ylab("Number of ASVs") ->richness_bg
+
+ggsave("Graphs/richness_bg.svg",        
+       plot = richness_bg,                                              
+       device = "svg",                    
+       width = 14,           
+       height = 10, 
+       dpi = 300)
+
+#test for signficant difference in benthic group dominance per habitat
+
+#calculate for reefs
+foram_df %>%
+  filter(Habitat %in% "Reef") %>%
+  group_by(Benthic.group, seqid)%>%
+  summarise(nr_otu = n(), .groups = "drop") -> foram_otu_r
+
+foram_otu_r$Benthic.group <- as.factor(foram_otu_r$Benthic.group)
+leveneTest(nr_otu ~ (Benthic.group), data = foram_otu_r, center = mean) #variances  equal
+lm.reef <- lm(nr_otu ~ (Benthic.group), data = foram_otu_r)
+anova(lm.reef) # p = 0.001736
+HSD.test(lm.reef, trt = "Benthic.group", group = FALSE, console = TRUE)
+
+#calculate for marine lakes
+foram_df %>%
+  filter(Habitat %in% "Marine Lake") %>%
+  group_by(Benthic.group, seqid)%>%
+  summarise(nr_otu = n(), .groups = "drop") -> foram_otu_ml
+
+foram_otu_ml$Benthic.group <- as.factor(foram_otu_ml$Benthic.group)
+leveneTest(nr_otu ~ (Benthic.group), data = foram_otu_ml, center = mean) #variances not  equal
+foram_otu_ml$nr_otulog <- log(foram_otu_ml$nr_otu + 1) #variances still not equal after transformation
+kruskal.test(nr_otu ~ (Benthic.group), data = foram_otu_ml) # p = 0.2018
+```

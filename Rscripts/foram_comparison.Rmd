@@ -1,0 +1,182 @@
+---
+title: "R Notebook"
+author: "Venus van Hoof"
+output: html_notebook
+---
+
+This Rscript makes a barplot to compare the foraminifera listed in the COI reference database to the foraminifera that were found in literature and in the sediment subsamples. 
+
+The first plot is created to compare the entire foraminifera dataset. The barplot shows the number of orders, families, genera and species that were identified; the overlap with the reference database is shown by slanted lines. For this, two subsets of the data are made: one containing all the identfied species for each source (COI reference database, reviewed studies, or foram subset), while the second subset only contains the number of foraminifera that are shared with the reference database. These subsets are plotter on top each other in ggplot. 
+The plot is saved in a SVG file, so it can be accessed for editing later on. 
+
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+library(tidyverse)
+library(readxl)
+library(extrafont)
+library(colorBlindness)
+library(ggpattern)
+
+dat <- read_excel("Rdata/comparison reference database - literature - samples.xlsx", sheet = "Foram_overview")
+safe_colorblind_palette <- c("#481567FF", "#238A8DFF","#73D055FF",  "#FDE725FF")
+
+
+###----------------------- Barplot of foraminifera comparison (literature, database, subsamples)----------------------
+
+#data wrangling
+dat %>%
+  dplyr::select(source, species, genus, family, order) %>%
+  pivot_longer(cols = species:order,
+               names_to = "taxonomic_level",
+               values_to = "count") %>%
+  filter(!is.na(count)) -> dat_long
+
+dat_long %>%
+  filter(source%in% c("overlap", "overlap_lit_db", "overlap_sed_db")) -> dat_overlap
+
+# make a separate dataset for the overlap with the COI reference database
+dat_overlap %>%
+  rename(overlap = source) %>%
+  mutate(source = case_when(
+    overlap == "overlap" ~ "COI_reference_database",
+    overlap  ==  "overlap_lit_db" ~ "literature",
+    overlap ==  "overlap_sed_db" ~ "sediment_samples")) %>%
+  mutate(taxonomic_level = factor(taxonomic_level, levels = c("order", "family", "genus", "species")))-> dat_overlap
+
+# make a separate dataset for all foraminifera counts
+dat_long %>%
+  filter(!source %in% c("overlap", "overlap_lit_db", "overlap_sed_db")) %>%
+  mutate(taxonomic_level = factor(taxonomic_level, levels = c("order", "family", "genus", "species"))) -> dat_long
+
+#make barplot
+ggplot() +
+  geom_col(data = dat_long,
+           aes(x = taxonomic_level, y = count, fill = taxonomic_level),
+           color = "black") + 
+  geom_col_pattern(data = dat_overlap, 
+                   aes(x = taxonomic_level, y = count, pattern_fill = taxonomic_level),
+                   pattern = "stripe",
+                   pattern_density= 0.4,
+                   pattern_spacing = 0.04,
+                   pattern_angle = 30,
+                   fill = "white", 
+                   pattern_key_scale_factor =0.5, colour = "black") +
+  scale_pattern_fill_manual(
+    name= "Overlap with reference database",
+    values = safe_colorblind_palette) +
+  geom_text(data = dat_long,
+            aes(x = taxonomic_level, y = count, label =count), #displays label above the bar
+            vjust = -0.5, size = 3, inherit.aes = FALSE) + #move label slightly above the bar
+  facet_wrap(~source, labeller = as_labeller(c( #multiple plots per plotgroups
+    COI_reference_database = "Foraminifera COI \n reference database",
+    literature = "Foraminifera literature",
+    sediment_samples = "Foraminifera \n sediment subsamples"))) +
+  scale_fill_manual(
+    name   = "Taxonomic level",
+    values = safe_colorblind_palette) +
+  labs(x = "Taxonomic Level", y = "Count") +
+  ggtitle("All foraminifera") +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Arial", face = "bold", color = "black"),
+    plot.title = element_text(hjust=0.5,size =14, face = "bold" ),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1, size= 10, family = "Arial", face = "plain"),
+    strip.text = element_text(size = 10, face = "plain"),
+    legend.position = "right") +
+  guides(fill = guide_legend(order = 1),
+         alpha = guide_legend(order = 2)) +
+  coord_cartesian(clip = "off") -> p1 
+
+#ggsave("Graphs/foram_comparison.svg",        
+       plot = p1,                                              
+       device = "svg",                    
+       width = 8,                                                                         
+       height = 6, 
+       dpi = 300)
+
+```
+
+Next, the same plot is created, but this time only for the large benthic foraminifera.The code remains the same. 
+
+```{r}
+LBF <- read_excel("Rdata/comparison reference database - literature - samples.xlsx", sheet = "LBF_overview")
+
+#data wrangling
+LBF %>%
+  dplyr::select(source, species, genus, family, order) %>%
+  pivot_longer(cols = species:order,
+               names_to = "taxonomic_level",
+               values_to = "count") %>%
+  filter(!is.na(count)) -> LBF_long
+
+LBF_long %>%
+  filter(source%in% c("overlap", "overlap_lit_db", "overlap_sed_db")) -> LBF_overlap
+
+# make a separate dataset for the overlap with the COI reference database
+LBF_overlap %>%
+  rename(overlap = source) %>%
+  mutate(source = case_when(
+    overlap == "overlap" ~ "COI_reference_database",
+    overlap  ==  "overlap_lit_db" ~ "literature",
+    overlap ==  "overlap_sed_db" ~ "sediment_samples")) %>%
+  mutate(taxonomic_level = factor(taxonomic_level, levels = c("order", "family", "genus", "species")))-> LBF_overlap
+
+# make a separate dataset for all foraminifera counts
+LBF_long %>%
+  filter(!source %in% c("overlap", "overlap_lit_db", "overlap_sed_db")) %>%
+  mutate(taxonomic_level = factor(taxonomic_level, levels = c("order", "family", "genus", "species"))) -> LBF_long
+
+# make barplot
+ggplot() +
+  geom_col(data = LBF_long,
+           aes(x = taxonomic_level, y = count, fill = taxonomic_level),
+           color = "black") + 
+  geom_col_pattern(data =LBF_overlap, 
+                   aes(x = taxonomic_level, y = count, pattern_fill = taxonomic_level),
+                   pattern = "stripe",
+                   pattern_density= 0.4,
+                   pattern_spacing = 0.04,
+                   pattern_angle = 30,
+                   fill = "white", 
+                   pattern_key_scale_factor =0.5, colour = "black") +
+  scale_pattern_fill_manual(
+    name= "Overlap with reference database",
+    values = safe_colorblind_palette) +
+  geom_text(data = LBF_long,
+            aes(x = taxonomic_level, y = count, label =count), #displays label above the bar
+            vjust = -0.5, size = 3, inherit.aes = FALSE) + #move label slightly above the bar
+  facet_wrap(~source, labeller = as_labeller(c( #multiple lots per plotgroups, labeller renames each facet title
+    COI_reference_database = "Foraminifera COI \n reference database",
+    literature = "Foraminifera literature",
+    sediment_samples = "Foraminifera \n sediment subsamples"
+  ))) +
+  scale_fill_manual(
+    name   = "Taxonomic level",
+    values = safe_colorblind_palette
+  ) +
+  labs(x = "Taxonomic Level", y = "Count") +
+  ggtitle("Large benthic foraminifera") +
+  theme_bw() +
+  theme(
+    text = element_text(family = "Arial", face = "bold", color = "black"),
+    plot.title = element_text(hjust=0.5,size =14, face = "bold" ),
+    axis.title = element_text(size = 12, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1, size= 10, family = "Arial", face = "plain"),
+    strip.text = element_text(size = 10, face = "plain"),
+    legend.position = "right"
+  ) +
+  guides(fill = guide_legend(order = 1),
+         alpha = guide_legend(order = 2)) +
+  coord_cartesian(clip = "off") -> p2 
+
+ggsave("Graphs/LBF_comparison.svg",        
+       plot = p2,                                              
+       device = "svg",                    
+       width = 8,                                                                                  
+       height = 6, 
+       dpi = 300)
+
+
+```
