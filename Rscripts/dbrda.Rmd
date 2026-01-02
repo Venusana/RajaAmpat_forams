@@ -1,0 +1,488 @@
+---
+title: "dbRDA"
+author: Venus van Hoof
+output: html_notebook
+---
+
+This script contains the code to make a dbrda. 
+
+**rda reef**
+
+A rda is made for the reef and the marine lake locations each. ASV abundance data is Hellinger transformed and a rda model is made, as it has a better fit to the data compared to a cca. With forward selection (using the ordi2step function), the best model is selected. This model removes temperature as a predictor, leaving DIN and chlorophyll-a. Continuing with these environmental variables, significance for the mode, its axes and predictors is tested with an anova. Afterwards, data is extracted for the position of the commmunities in the dbRDA plot. Also the positions of significant identified species are extracted. The data is visualized in a dbrda plot.
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+library(tidyverse)
+library(vegan)
+library(ggh4x)
+library(extrafont)
+library(ggrepel)
+
+envir <- read.csv("Rdata/clean_envir_datanew.csv", row.names = 1)
+
+
+###-----------------db RDA for ASVs--------------------------------------------------------
+
+df <- read.csv("Rdata/working_dataset.csv")
+
+foram_df <- subset(df, df$Phylum == "Foraminifera")
+
+envir %>%
+  rename(chlor_a = mean_chlora) %>%
+  rename(temperature = mean_temp) %>%
+  mutate(Location = case_when(
+    Location == "MERVilla" ~ "Villa-MER",
+    Location == "MERBay" ~"MER-Bay",
+    Location == "SoridoBay" ~ "Sorido Bay",
+    Location == "NewReef" ~ "New Reef",
+    Location == "MiosKon" ~ "Mioskin",
+    Location == "KaligNorth" ~ "KaligN",
+    Location == "SouthKri" ~ "South kri",
+    Location == "WarakaketN" ~ "Warakaket",
+    Location == "MERHR" ~ "MEHR",
+    Location == "MERStaffHQ" ~"StaffHQ",
+    TRUE ~ Location)) -> envir1
+
+#make an ASV table for the reef locations
+foram_df %>%
+  filter(!Location %in% c("MIS23", "MIS26", "MIS27", "MIS06", "Batbitieru", "Villa-MER")) %>%
+  dplyr::select(otu, seqid,reads) %>%
+  pivot_wider(names_from = otu, values_from = reads, values_fill = list(reads = 0)) %>%
+  as.data.frame()-> foram_df1
+
+rownames(foram_df1) <- foram_df1$seqid
+foram_df1 <- foram_df1[, -1]
+foram_df1 <- as.matrix(foram_df1)
+
+#hellinger tranformation
+foram_hell <- decostand(foram_df1, method = "hellinger")
+
+#add metadata to ASV table
+foram_df %>%
+  dplyr::select(seqid, Location, Habitat, Benthic.group) %>%
+  unique()-> foram_metadat
+
+foram_hell %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "seqid")%>%
+  left_join(foram_metadat, by = "seqid") %>%
+  left_join(envir1 %>%
+              dplyr::select(-Habitat), by = "Location") -> foram_hell_md
+
+#calculate rda model
+foram.rda <- dbrda(foram_hell ~ DIN + temperature + chlor_a, data=foram_hell_md, distance = "bray")
+RsquareAdj(foram.rda) #R squared:  0.02399365
+
+#calculate cca model
+foram.cca<- cca(foram_hell ~ DIN + temperature + chlor_a, data=foram_hell_md, distance = "bray")
+RsquareAdj(foram.cca) # R aquared: 0.009528649 => rda is better fit
+
+#continue with rda model
+summary(foram.rda)
+#first axis explains 0.4782 ~ 47.82%
+#second axis  explains 0.2996 ~29.96%
+anova.cca(foram.rda, permutations = 999)
+#p = 0.001
+anova.cca(foram.rda, by = "axis")
+#dbRDA1    1   0.7908 2.3717  0.004 **
+#dbRDA2    1   0.4864 1.4586  0.102   
+#dbRDA3    1   0.3461 1.0380  0.364  
+anova.cca(foram.rda, by = "terms")
+#DIN          1   0.5404 1.6206  0.012 * 
+#temperature  1   0.3955 1.1861  0.160   
+#chlor_a      1   0.6874 2.0617  0.002 **
+
+set.seed(2000)
+#forward model selection
+model_sel <- ordiR2step(rda(foram_hell ~ 1, data = foram_hell_md[,2627:ncol(foram_hell_md)]), 
+                        scope = formula(foram.rda),
+                        direction = "forward", Pin = 0.05, R2scope = TRUE) 
+model_sel$anova
+# DIN           0.0075023  1 -15.037 1.5745  0.022 *
+# chlor_a       0.0119291  1 -14.414 1.3360  0.040 *
+
+#----------------continue with only significant variables (DIN & chlor-a)------------------------
+foram.rda.r <- dbrda(foram_hell ~ DIN + chlor_a, data=foram_hell_md, distance = "bray")
+RsquareAdj(foram.rda.r) #R squared: 0.01910011
+
+#continue with rda model
+summary(foram.rda.r)
+#first axis  explains 0.6524 ~ 65%
+#second axis  explains 0.3476 ~35%
+set.seed(2000)
+anova.cca(foram.rda.r, permutations = 999) 
+#p = 0.002
+set.seed(2000)
+anova.cca(foram.rda.r, by = "axis")
+#dbRDA1    1   0.7608 2.2702  0.002 **
+#dbRDA2    1   0.4054 1.2097  0.146 
+set.seed(2000)
+anova.cca(foram.rda.r, by = "terms")
+#DIN       1   0.5404 1.6125  0.015 **
+#chlor_a   1   0.6258 1.8674  0.003 ** 
+
+varpart(foram_hell, ~DIN, ~chlor_a, data = foram_hell_md)
+#[a+c] = X1            1   0.02056       0.00750     TRUE
+#[b+c] = X2            1   0.01905       0.00597     TRUE
+#[a+b+c] = X1+X2       2   0.03793       0.01193     TRUE
+
+#extract RDA site scores as a data frame
+scores(foram.rda.r, display = "sites") %>% 
+  as.data.frame() -> rda.sites.r
+rda.sites.r$seqid <- rownames(rda.sites.r)
+
+#merge site scores with metadata
+rda.sites.r %>%
+  left_join(foram_metadat, by = "seqid") -> rda.sites.r.md
+
+#calculate weighted RDA scores
+total_abund <- colSums(foram_hell)
+asv_table_nonzero <- foram_hell[,total_abund > 0 ] #includes all ASVs with abundance >0
+total_abund_nonzero <- total_abund[total_abund > 0] #only includes total abundance >0
+asv_table_nonzero <- asv_table_nonzero[rda.sites.r$seqid,] #keep only rows whose names match rda$seqid
+
+weighted_RDA <- as.matrix(t(asv_table_nonzero)) %*% as.matrix(rda.sites.r[, c("dbRDA1","dbRDA2")])
+weighted_RDA1 <- weighted_RDA[, "dbRDA1"] / total_abund_nonzero #normalize
+weighted_RDA2 <- weighted_RDA[, "dbRDA2"] / total_abund_nonzero
+
+asv.scores.r <- data.frame(
+  RDA1 = weighted_RDA1,
+  RDA2 = weighted_RDA2,
+  Abundance = total_abund_nonzero,
+  ASV = colnames(asv_table_nonzero)
+)
+
+#Filter only complete cases for envfit
+envir.var.r <- foram_hell_md[,c(1,2627:ncol(foram_hell_md))]
+envir.var.r %>% dplyr::select(-temperature) -> envir.var.r
+rda.fit.samples.r <- rda.sites.r %>% filter(!is.na(dbRDA1) & !is.na(dbRDA2)) # all samples are maintained
+
+#calculate significant environmental vectors in ordination space
+fit.r <- envfit(rda.fit.samples.r[, c("dbRDA1", "dbRDA2")], envir.var.r, permutations = 9999, na.rm=TRUE)
+sig.vars.r <- as.data.frame(fit.r$vectors$arrows * sqrt(fit.r$vectors$r))
+sig.vars.r$pval <- fit.r$vectors$pvals
+sig.vars.r <- sig.vars.r[sig.vars.r$pval <= 0.05, ] #significant vectors
+
+
+# Save all envfit vectors
+envfit_results <- as.data.frame(fit.r$vectors$arrows)
+envfit_results$r <- fit.r$vectors$r
+envfit_results$r2 <- fit.r$vectors$r^2
+envfit_results$pval <- fit.r$vectors$pvals
+write.csv(envfit_results, "Rdata/envfit_results_reef_asv.csv", row.names = TRUE)
+
+# Fit asv data to the dbRDA ordination
+species.fit.r <- envfit(foram.rda.r, foram_hell, permutations = 999)
+
+sig.sp.r <- as.data.frame(species.fit.r$vectors$arrows * sqrt(species.fit.r$vectors$r))
+sig.sp.r$pval <- species.fit.r$vectors$pvals
+sig.sp.r <- sig.sp.r[sig.sp.r$pval <= 0.001, ]
+row.names(sig.sp.r) -> sig.sp.r$otu
+write.csv(sig.sp.r, "Rdata/sig_sp_rda_reef.csv", row.names = TRUE)
+
+#sig.sp.r <-read.csv("data analysis/data/sig_sp_results_reef.csv")
+# extract family names
+foram_sp <-  foram_df[foram_df$X.Identity.percentage > 99.4,]
+
+foram_sp %>%
+  filter(!Location %in% c("MIS23", "MIS26", "MIS27", "MIS06", "Batbitieru", "Villa-MER")) %>%
+  dplyr::select(Morphospecies, otu,seqid) %>%
+  unique()-> sp_dat_r
+
+# keep  signficant species 
+foram_df1 %>%
+  as.data.frame() %>%
+  rownames_to_column("seqid") %>%
+  pivot_longer(-seqid, names_to = "otu", values_to = "nr_reads")-> foram_abund_r
+
+sp_dat_r%>% left_join(foram_abund_r, by = c("otu", "seqid")) -> combdat_r
+
+sig.sp.r %>% left_join(combdat_r, by = "otu") %>%
+  drop_na()-> sig.species.r
+
+sig.species.r %>%group_by(Morphospecies) %>%
+  summarise(dbRDA1 = weighted.mean(dbRDA1, nr_reads),
+            dbRDA2 = weighted.mean(dbRDA2, nr_reads)) -> sig.species
+
+arrow_multiplier <- 3
+# Get constrained eigenvalues 
+eig.constr.r <- eigenvals(foram.rda.r, model = "constrained")
+
+# Compute axis labels with percentages
+x_lab <- paste0("dbRDA1 (", round(eig.constr.r[1] / sum(eig.constr.r) * 100, 1), "%)")
+y_lab <- paste0("dbRDA2 (", round(eig.constr.r[2] / sum(eig.constr.r) * 100, 1), "%)")
+
+
+##ggplot rda per benthic group
+ggplot() +
+  # geom_point(data = asv.scores.r, aes(x = RDA1, y = RDA2, size = Abundance), color = "grey80", alpha = 0.6) +
+  guides(size = "none")+
+  geom_point(data = rda.sites.r.md, aes(x = dbRDA1, y = dbRDA2,color = Benthic.group),
+             size = 2, alpha = 0.9) +
+  scale_color_manual(values = c("hard coral dominated" = "#4B0055", "macro-algae" = "#008298",
+                                "macro-algae & hard coral" = "#274983", "rubble - soft coral - encrusting coral" = "#7ED357",
+                                "soft coral dominated" = "#FDE333"))+
+  stat_ellipse(data = rda.sites.r.md, aes(x = dbRDA1, y =dbRDA2, color = Benthic.group),
+               linetype = "dashed", level = 0.95) +
+  geom_segment(data = as.data.frame(sig.vars.r),
+               aes(x = 0, y = 0, xend = dbRDA1 * arrow_multiplier, yend = dbRDA2 * arrow_multiplier),
+               arrow = arrow(length = unit(0.3, "cm")), color = "black") +
+  geom_text(data = as.data.frame(sig.vars.r),
+            aes(x = dbRDA1 * arrow_multiplier * 1.1, y = dbRDA2 * arrow_multiplier * 1.1,
+                label = rownames(sig.vars.r)),
+            color = "black", size = 5) +
+  geom_text(data = sig.species,
+            aes(x = dbRDA1 * arrow_multiplier * 1.1, y = dbRDA2 * arrow_multiplier * 1.1,
+                label = Morphospecies),
+            color = "darkblue", size = 5) +
+  labs(x = x_lab, y = y_lab) +
+  ggtitle("Reef") +
+  labs(color = "Benthic group dominance") +
+  theme_bw() +
+  theme(
+    legend.key.size = unit(0.5, "lines"),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 14, hjust = 0.5, face = "bold"),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "vertical",
+    text = element_text(family = "Arial", face= "plain"),
+    axis.text.x = element_text(hjust = 0.5, size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 16, face = "bold"),
+    axis.title.y = element_text(size = 16, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    panel.border = element_rect(colour = "black", fill = NA),
+    panel.grid = element_blank()) +
+  guides(color = guide_legend(title.position = "top")) -> rda_reef_asv
+
+ggsave("Graphs/rda_reefasv.svg",        
+       plot = rda_reef_asv,                                              
+       device = "svg",                    
+       width = 12,                                                                                     
+       height = 6, 
+       dpi = 300)
+```
+
+**rda marine lake**
+
+The same code as above is applied to the marine lake dataset.
+
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+###-----------------db RDA for marine lake ASVs--------------------------------------------------------
+
+#make an ASV table for the marine lake locations
+foram_df %>%
+  filter(Location %in% c("MIS23", "MIS26", "MIS27", "MIS06")) %>%
+  dplyr::select(otu, seqid,reads) %>%
+  pivot_wider(names_from = otu, values_from = reads, values_fill = list(reads = 0)) %>%
+  as.data.frame()-> foram_ml
+
+rownames(foram_ml) <- foram_ml$seqid
+foram_ml <- foram_ml[, -1]
+foram_ml <- as.matrix(foram_ml)
+
+#hellinger tranformation
+foram_hellml <- decostand(foram_ml, method = "hellinger")
+
+#add metadata to ASV table
+foram_df %>%
+  dplyr::select(seqid, Location, Habitat, Benthic.group) %>%
+  filter(Location %in% c("MIS23", "MIS26", "MIS27", "MIS06")) %>%
+  unique()-> foram_metadat_ml
+
+foram_hellml %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "seqid")%>%
+  left_join(foram_metadat_ml, by = "seqid") %>%
+  left_join(envir1 %>%
+              dplyr::select(-Habitat), by = "Location") -> foram_hellml_md
+
+#calculate rda model
+foram.rda.ml <- dbrda(foram_hellml ~ DIN + temperature + chlor_a, data=foram_hellml_md, distance = "bray")
+RsquareAdj(foram.rda.ml) #R squared: 0.3763533
+
+#calculate cca model
+foram.cca.ml<- cca(foram_hellml ~ DIN + temperature + chlor_a, data=foram_hellml_md, distance = "bray")
+RsquareAdj(foram.cca.ml) # R squared: 0.1190348 => rda is better fit
+
+#continue with rda model
+summary(foram.rda.ml)
+#first axis  explains 0.4939 ~ 49%
+#second axis  explains 0.3247 ~32%
+
+anova.cca(foram.rda.ml, permutations = 999) #p = 0.001
+anova.cca(foram.rda.ml, by = "axis")
+#dbRDA1    1  0.88229 6.8462  0.001 ***
+#dbRDA2    1  0.58012 4.5015  0.001 ***
+#dbRDA3    1  0.32410 2.5148  0.001 *** 
+anova.cca(foram.rda.ml, by = "terms")
+#DIN          1  0.60600 4.7023  0.001 ***
+#temperature  1  0.34971 2.7136  0.005 ** 
+#chlor_a      1  0.83079 6.4466  0.001 ***
+
+varpart(foram_hellml, ~DIN, ~chlor_a, data = foram_hellml_md)
+#[a+c] = X1            1   0.15043       0.10046     TRUE
+#[b+c] = X2            1   0.15194       0.10205     TRUE
+#[a+b+c] = X1+X2       2   0.28333       0.19374     TRUE
+
+set.seed(2000)
+model_selml <- ordiR2step(rda(foram_hellml ~ 1, data = foram_hellml_md[,771:ncol(foram_hellml_md)]), 
+                        scope = formula(foram.rda.ml),
+                        direction = "forward", R2scope = TRUE) 
+
+model_selml$anova #chlor-a and DIN are significant
+
+#-------------------continue only with only significant variables---------------
+#calculate rda model
+foram.rda.ml <- dbrda(foram_hellml ~ DIN + chlor_a, data=foram_hellml_md, distance = "bray")
+RsquareAdj(foram.rda.ml) #R squared: 0.2012836
+
+summary(foram.rda.ml)
+#first axis  explains 0.5619 ~ 56%
+#second axis  explains 0.4381 ~44%
+
+set.seed(2000)
+anova.cca(foram.rda.ml, permutations = 999) #p = 0.001
+set.seed(2000)
+anova.cca(foram.rda.ml, by = "axis")
+#dbRDA1    1  0.60623 3.6730  0.004 **
+#dbRDA2    1  0.47257 2.8632  0.004 **
+anova.cca(foram.rda.ml, by = "terms")
+#DIN       1  0.60600 3.6716  0.001 ***
+#chlor_a   1  0.47279 2.8645  0.001 ***
+
+#extract RDA site scores as a data frame
+scores(foram.rda.ml, display = "sites") %>% 
+  as.data.frame() -> rda.sites.ml
+rda.sites.ml$seqid <- rownames(rda.sites.ml)
+
+#merge site scores with metadata
+rda.sites.ml %>%
+  left_join(foram_metadat_ml, by = "seqid") -> rda.sites.ml.md
+
+#calculate weighted RDA scores
+total_abund.ml <- colSums(foram_hellml)
+asv_table_nonzero.ml <- foram_hellml[,total_abund.ml > 0 ] #includes all ASVs with abundance >0
+total_abund_nonzero.ml <- total_abund.ml[total_abund.ml > 0] #only includes total abundance >0
+asv_table_nonzero.ml <- asv_table_nonzero.ml[rda.sites.ml$seqid,] #keep only rows whose names match rda$seqid
+
+weighted_RDA.ml <- as.matrix(t(asv_table_nonzero.ml)) %*% as.matrix(rda.sites.ml[, c("dbRDA1","dbRDA2")])
+weighted_RDA1.ml <- weighted_RDA.ml[, "dbRDA1"] / total_abund_nonzero.ml #normalize
+weighted_RDA2.ml <- weighted_RDA.ml[, "dbRDA2"] / total_abund_nonzero.ml
+
+asv.scores.ml <- data.frame(
+  RDA1 = weighted_RDA1.ml,
+  RDA2 = weighted_RDA2.ml,
+  Abundance = total_abund_nonzero.ml,
+  ASV = colnames(asv_table_nonzero.ml)
+)
+
+#Filter only complete cases for envfit
+envir.var.ml <- foram_hellml_md[,c(1,771:772)]
+rda.fit.samples.ml <- rda.sites.ml %>% filter(!is.na(dbRDA1) & !is.na(dbRDA2)) # all samples are maintained
+
+
+#calculate significant environmental vectors in ordination space
+fit.ml <- envfit(rda.fit.samples.ml[, c("dbRDA1", "dbRDA2")], envir.var.ml, permutations = 9999, na.rm=TRUE)
+sig.vars.ml <- as.data.frame(fit.ml$vectors$arrows * sqrt(fit.ml$vectors$r))
+sig.vars.ml$pval <- fit.ml$vectors$pvals 
+sig.vars.ml <- sig.vars.ml[sig.vars.ml$pval <= 0.05, ] #significant vectors
+
+
+# Save all envfit vectors
+envfit_results.ml <- as.data.frame(fit.ml$vectors$arrows)
+envfit_results.ml$r <- fit.ml$vectors$r
+envfit_results.ml$r2 <- fit.ml$vectors$r^2
+envfit_results.ml$pval <- fit.ml$vectors$pvals
+
+# Fit asv data to the dbRDA ordination
+species.fit.ml <- envfit(foram.rda.ml, foram_hellml, permutations = 999)
+
+sig.sp.ml <- as.data.frame(species.fit.ml$vectors$arrows * sqrt(species.fit.ml$vectors$r))
+sig.sp.ml$pval <- species.fit.ml$vectors$pvals
+sig.sp.ml <- sig.sp.ml[sig.sp.ml$pval <= 0.001, ]
+row.names(sig.sp.ml) -> sig.sp.ml$otu
+write.csv(sig.sp.ml, "Rdata/sig_sp_rda_ml.csv", row.names = TRUE)
+
+foram_sp <-  foram_df[foram_df$X.Identity.percentage > 99.4,]
+foram_sp %>%
+  filter(Location %in% c("MIS23", "MIS26", "MIS27", "MIS06")) %>%
+  dplyr::select(Morphospecies, otu,seqid) %>%
+  unique()-> sp_dat_ml
+
+# keep  signficant families 
+foram_ml %>%
+  as.data.frame() %>%
+  rownames_to_column("seqid") %>%
+  pivot_longer(-seqid, names_to = "otu", values_to = "nr_reads")-> foram_abund_ml
+
+sp_dat_ml%>% left_join(foram_abund_ml, by = c("otu", "seqid")) -> combdat_ml
+
+sig.sp.ml %>% left_join(combdat_ml, by = "otu") %>%
+  drop_na()-> sig.species.ml
+
+sig.species.ml %>% group_by(Morphospecies) %>%
+  summarise(dbRDA1 = weighted.mean(dbRDA1, nr_reads),
+            dbRDA2 = weighted.mean(dbRDA2, nr_reads)) -> sig.spml
+
+arrow_multiplier <- 1
+# Get constrained eigenvalues 
+eig.constr.ml <- eigenvals(foram.rda.ml, model = "constrained")
+
+# Compute axis labels with percentages
+x_lab <- paste0("dbRDA1 (", round(eig.constr.ml[1] / sum(eig.constr.ml) * 100, 1), "%)")
+y_lab <- paste0("dbRDA2 (", round(eig.constr.ml[2] / sum(eig.constr.ml) * 100, 1), "%)")
+
+
+##ggplot rda per benthic group
+ggplot() +
+  #geom_point(data = asv.scores.ml, aes(x = RDA1, y = RDA2, size = Abundance), color = "grey80", alpha = 0.6) +
+  guides(size = "none")+
+  geom_point(data = rda.sites.ml.md, aes(x = dbRDA1, y = dbRDA2,color = Benthic.group),
+             size = 2, alpha = 0.9) +
+  scale_color_manual(values = c("macro-algae & hard coral" = "#274983",
+                                "CCA & Sponge" = "#00B28A", "rubble - soft coral - encrusting coral" = "#7ED357")) +
+  stat_ellipse(data = rda.sites.ml.md, aes(x = dbRDA1, y =dbRDA2, color = Benthic.group),
+               linetype = "dashed", level = 0.95) +
+  geom_segment(data = as.data.frame(sig.vars.ml),
+               aes(x = 0, y = 0, xend = dbRDA1 * arrow_multiplier, yend = dbRDA2 * arrow_multiplier),
+               arrow = arrow(length = unit(0.3, "cm")), color = "black") +
+  geom_text(data = as.data.frame(sig.vars.ml),
+            aes(x = dbRDA1 * arrow_multiplier * 1.1, y = dbRDA2 * arrow_multiplier * 1.1,
+                label = rownames(sig.vars.ml)),
+            color = "black", size = 5) +
+  geom_text(data = sig.spml,
+            aes(x = dbRDA1 * arrow_multiplier * 1.1, y = dbRDA2 * arrow_multiplier * 1.1,
+                label = Morphospecies),
+            color = "darkblue", size = 5) +
+  labs(x = x_lab, y = y_lab) +
+  ggtitle("Marine Lake") +
+  labs(color = "Benthic group dominance") +
+  theme_bw() +
+  theme(
+    legend.key.size = unit(0.5, "lines"),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 14, hjust = 0.5, face = "bold"),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "vertical",
+    text = element_text(family = "Arial", face= "plain"),
+    axis.text.x = element_text(hjust = 0.5, size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.x = element_text(size = 16, face = "bold"),
+    axis.title.y = element_text(size = 16, face = "bold"),
+    plot.title = element_text(size = 16, face = "bold"),
+    panel.border = element_rect(colour = "black", fill = NA),
+    panel.grid = element_blank()) +
+  guides(color = guide_legend(title.position = "top")) -> rda_ml_asv
+
+ggsave("Graphs/rda_mlasv.svg",        
+       plot = rda_ml_asv,                                              
+       device = "svg",                    
+       width = 12,                                                                                     
+       height = 6, 
+       dpi = 300)
+```

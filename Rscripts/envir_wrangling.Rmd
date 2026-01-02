@@ -1,0 +1,134 @@
+---
+title: "R Notebook"
+author: Venus van Hoof
+output: html_notebook
+---
+
+In this script, the environmental data is combined, scaled and tested for collinearity. 
+
+***Combine environmental data**
+
+Measurements of chlorophyll-a, temperature, NO3, NO2, NH4 and PO4 were taken. These measurements are stored in two different CSV files. Because multiple measurements of each environmental variable were taken at each sampling location, the mean value at each sampling location is calculated. 
+Because no measurements for chlorophyll-a and temperature were taken for the sampling site MERBAY, the mean was taken of the values from the locations MERBAY1 and MERBAY2.
+The values of NO3, NO2 and NH4 were summed to get the total dissolved inorganic nitrgoen (DIN).
+Afterwards, all environmenal data is combined to create one dataframe. 
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+library(tidyverse)
+
+###----------------calculate mean chlor-a & temperature data ------------------------------
+envir1 <- read.csv("Rdata/envir.csv")
+str(envir1)
+
+#calculate mean chlor-a (filter out measurements shallower than 1m)
+envir1 %>%
+  filter(depth >= 1) %>%
+  group_by(site, site_type) %>%
+  summarise(mean_chlora = mean(Chl.a), .groups = "drop")-> chlor_a
+
+#calculate mean temperature
+envir1 %>%
+  group_by(site, site_type) %>%
+  summarise(mean_temp = mean(Temperature.CTD), .groups = "drop")-> temp
+
+#combine chlor-a and temp data
+chlor_a %>%
+  left_join(temp, by = c("site", "site_type")) -> envir_var1
+
+#add row for Mer-bay
+envir_var1 %>%
+  filter(site %in% c("MER_Bay1","MER_Bay2")) %>%
+  summarise(
+    across(where(is.numeric), \(x) mean(x, na.rm = TRUE)),
+    site_type = first(site_type)) %>%
+  mutate(site = "MERBay") -> Merbay
+
+#add row to envir var
+envir_var1  %>%
+  bind_rows(Merbay)-> envir_var1
+
+###------------------calculate mean DIN data---------------------------
+din <- read.csv("Rdata/DIN.csv")
+
+din %>%
+  group_by(site) %>%
+  mutate(across(tail(names(.), 5), ~mean(.x, na.rm = TRUE))) -> din2
+
+din2 %>%
+  group_by(site, region, site_type) %>%                      
+  summarise(across(where(is.numeric), ~mean(.x, na.rm = TRUE)), 
+            .groups = "drop") -> din3
+
+din3 %>%
+  group_by(site, region, site_type)%>%
+  mutate(DIN = sum(NH4,NO2,NO3)) %>%
+  dplyr::select(-NH4, -NO3.NO2,-NO2,-NO3)-> din4
+
+#----------------calculate PO4:DIN ratio -----------------------------------
+
+din4 %>%
+  mutate(DINIDIP = DIN/PO4) -> envir_ratio
+
+###------------------combine DIN and chlor-a data----------------------
+din4 %>%
+  full_join(envir_var1, by = c("site", "site_type")) %>%
+  drop_na()-> envir_var2
+
+envir_var2 %>%
+  rename(Location = site) %>%
+  rename(Habitat = site_type) -> envir_var2
+
+write.csv(envir_var2, "Rdata/environmental_dataNEW.csv")
+
+#remove locations that do not have foram data
+envir_var2 %>%
+  filter( !Location %in% c("HarapanJaya", "Kajerepop", "MERWorkshop", "MIS01", "RAJ04",
+                           "mangrove", "MIS14", "MIS17", "MIS20", "MIS31", "MIS40", "MIS40-Lagoon",
+                           "RAJ13", "UsahaJaya", "WAR03", "Batbitieru_NW",
+                           "Batbitieru_NW2", "Batbitieru_SWPoint", "Batbitieru_SWPoint2",
+                           "Lalelkai", "LosReef", "MER_Pier", "Reef-MIS01", "Reef-MIS06",
+                           "Reef-MIS27", "YamniniHomestay", "MER_Pier2", "Yellu")) -> filt_envir
+```
+**Scaling environmental variables**
+
+All environmental variables are scaled and checked for normality. Because the distribution of most environmental variables was not normal, the spearman rank correlation test was used for pairwise comparison. The results are visualized in a correlation matrix from the corrplot package. PO4 and DIN were collinear, therefore PO4 was removed.
+```{r}
+setwd("C:/Users/Venus/OneDrive/Documents/Github/RajaAmpat_forams")
+
+#scale envir variables
+filt_envir %>% 
+  ungroup() %>%
+  mutate(across(c(PO4, DIN, mean_chlora, mean_temp),
+                ~ as.numeric(scale(.)))) -> envir_sc
+#check for normality
+shapiro.test(envir_sc$PO4) #pval = 0.0006454 -> not normal
+shapiro.test(envir_sc$DIN) #pval =  0.02259 -> not normal
+shapiro.test(envir_sc$mean_chlora) #pval = 0.001652-> not normal
+shapiro.test(envir_sc$mean_temp) #pval =  0.8878 -> normal
+
+library(corrplot)
+#calculate correlation matrix
+envir_sc %>%
+  dplyr::select(PO4, DIN, mean_chlora, mean_temp) %>%
+  cor(method ="spearman", use = "pairwise.complete.obs") -> cor_matrix #or use spearman rank test for non normal
+
+#make plot
+corrplot(cor_matrix, method = "color", 
+         tl.cex = 0.8,
+         tl.srt = 45,
+         tl.col = "black",
+         diag = FALSE) 
+
+diag(cor_matrix) <- 0
+collinear_var <- which(abs(cor_matrix) > 0.7 & abs(cor_matrix) < 1, arr.ind = TRUE) #select correlations that are higher than 0.7 but not higher than 1
+high_cor_pairs <- data.frame(
+  Var1 = rownames(cor_matrix)[collinear_var[,1]],
+  Var2 = colnames(cor_matrix)[collinear_var[,2]],
+  Correlation = cor_matrix[collinear_var]) #DIN & PO4 are collinear
+
+#remove collinear variables (PO4)
+env_clean <- envir_sc %>% dplyr::select(-PO4)
+
+write.csv(env_clean, "Rdata/clean_envir_datanew.csv")
+```
